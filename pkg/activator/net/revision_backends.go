@@ -42,6 +42,7 @@ import (
 	pkgnet "knative.dev/networking/pkg/apis/networking"
 	"knative.dev/networking/pkg/prober"
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
+	podinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
 	serviceinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
@@ -98,6 +99,8 @@ type revisionWatcher struct {
 	protocol pkgnet.ProtocolType
 	updateCh chan<- revisionDestsUpdate
 	done     chan struct{}
+	destname map[string]corev1.PodPhase
+	destnameMux sync.RWMutex
 
 	// Stores the list of pods that have been successfully probed.
 	healthyPods sets.String
@@ -131,6 +134,7 @@ func newRevisionWatcher(ctx context.Context, rev types.NamespacedName, protocol 
 		protocol:         protocol,
 		updateCh:         updateCh,
 		done:             make(chan struct{}),
+		destname:		  make(map[string]corev1.PodPhase),
 		transport:        transport,
 		destsCh:          destsCh,
 		serviceLister:    serviceLister,
@@ -234,14 +238,16 @@ func (rw *revisionWatcher) probePodIPs(dests sets.String) (succeeded sets.String
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 
-	probeGroup, egCtx := errgroup.WithContext(ctx)
+	//probeGroup, egCtx := errgroup.WithContext(ctx)
+	probeGroup, _ := errgroup.WithContext(ctx)
 	healthyDests := make(chan string, toProbe.Len())
 
 	var sawNotMesh atomic.Bool
+	sawNotMesh.Store(true)
 	for dest := range toProbe {
 		dest := dest // Standard Go concurrency pattern.
 		probeGroup.Go(func() error {
-			ok, notMesh, err := rw.probe(egCtx, dest)
+			/*ok, notMesh, err := rw.probe(egCtx, dest)
 			if ok {
 				healthyDests <- dest
 			}
@@ -250,7 +256,14 @@ func (rw *revisionWatcher) probePodIPs(dests sets.String) (succeeded sets.String
 				// enabled and stay with direct scraping.
 				sawNotMesh.Store(true)
 			}
-			return err
+			return err*/
+			rw.destnameMux.RLock()
+			defer rw.destnameMux.RUnlock()
+			rw.logger.Errorf("dest %v status = %v", dest, rw.destname[dest])
+			if rw.destname[dest] == corev1.PodRunning {
+				healthyDests <- dest
+			}
+			return nil
 		})
 	}
 
@@ -311,6 +324,7 @@ func (rw *revisionWatcher) checkDests(curDests, prevDests dests) {
 			// We dont want to return here as an error still affects health states.
 		}
 
+		rw.logger.Errorf("Done probing, got %d healthy pods", len(hs))
 		// We need to send update if reprobe is non-empty, since the state
 		// of the world has been changed.
 		rw.logger.Debugf("Done probing, got %d healthy pods", len(hs))
@@ -455,6 +469,19 @@ func newRevisionBackendsManagerWithProbeFrequency(ctx context.Context, tr http.R
 		},
 	})
 
+	podInformer := podinformer.Get(ctx)
+	podInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+		FilterFunc: reconciler.ChainFilterFuncs(
+			reconciler.LabelExistsFilterFunc(serving.RevisionUID),
+		),
+		Handler: cache.ResourceEventHandlerFuncs{
+			AddFunc:    rbm.podUpdated,
+			UpdateFunc: controller.PassNew(rbm.podUpdated),
+			DeleteFunc: rbm.podDeleted,
+		},
+	})
+
+	rbm.logger.Errorf("Running")
 	go func() {
 		// updateCh can only be closed after revisionWatchers are done running
 		defer close(rbm.updateCh)
@@ -492,6 +519,7 @@ func (rbm *revisionBackendsManager) getOrCreateRevisionWatcher(rev types.Namespa
 
 	rwCh, ok := rbm.revisionWatchers[rev]
 	if !ok {
+		rbm.logger.Errorf("Create a watcher for %v", rev)
 		proto, err := rbm.getRevisionProtocol(rev)
 		if err != nil {
 			return nil, err
@@ -519,6 +547,7 @@ func (rbm *revisionBackendsManager) endpointsUpdated(newObj interface{}) {
 	endpoints := newObj.(*corev1.Endpoints)
 	revID := types.NamespacedName{Namespace: endpoints.Namespace, Name: endpoints.Labels[serving.RevisionLabelKey]}
 
+	//rbm.logger.Error("Ep: Trying to cretae revisionWatcher")
 	rw, err := rbm.getOrCreateRevisionWatcher(revID)
 	if err != nil {
 		rbm.logger.Errorw("Failed to get revision watcher", zap.Error(err), zap.String(logkey.Key, revID.String()))
@@ -530,6 +559,31 @@ func (rbm *revisionBackendsManager) endpointsUpdated(newObj interface{}) {
 		return
 	case rw.destsCh <- dests{ready: ready, notReady: notReady}:
 	}
+}
+
+func (rbm *revisionBackendsManager) podUpdated(newObj interface{}) {
+	// Ignore the updates when we've terminated.
+	select {
+	case <-rbm.ctx.Done():
+		return
+	default:
+	}
+	pod := newObj.(*corev1.Pod)
+	revID := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Labels[serving.RevisionLabelKey]}
+
+	rbm.logger.Errorf("Pod %v:%v", pod.GetName(), pod.Status.Phase)
+	rw, err := rbm.getOrCreateRevisionWatcher(revID)
+	if err != nil {
+		rbm.logger.Errorw("Failed to get revision watcher", zap.Error(err), zap.String(logkey.Key, revID.String()))
+		return
+	}
+
+	rbm.revisionWatchersMux.Lock()
+	defer rbm.revisionWatchersMux.Unlock()
+	rw.destnameMux.Lock()
+	defer rw.destnameMux.Unlock()
+	ip := pod.Status.PodIP
+	rw.destname[ip] = pod.Status.Phase
 }
 
 // deleteRevisionWatcher deletes the revision watcher for rev if it exists. It expects
@@ -555,4 +609,22 @@ func (rbm *revisionBackendsManager) endpointsDeleted(obj interface{}) {
 	rbm.revisionWatchersMux.Lock()
 	defer rbm.revisionWatchersMux.Unlock()
 	rbm.deleteRevisionWatcher(revID)
+}
+
+func (rbm *revisionBackendsManager) podDeleted(obj interface{}) {
+	// Ignore the updates when we've terminated.
+	select {
+	case <-rbm.ctx.Done():
+		return
+	default:
+	}
+	po := obj.(*corev1.Pod)
+	revID := types.NamespacedName{Namespace: po.Namespace, Name: po.Labels[serving.RevisionLabelKey]}
+
+	rbm.logger.Errorf("Deleting pod", zap.String(logkey.Key, revID.String()))
+	rbm.revisionWatchersMux.Lock()
+	defer rbm.revisionWatchersMux.Unlock()
+	if rw, ok := rbm.revisionWatchers[revID]; ok {
+		delete(rw.destname, po.Status.PodIP)
+	}
 }

@@ -125,6 +125,7 @@ func main() {
 		profilingHandler.UpdateFromConfigMap)
 
 	podLister := podinformer.Get(ctx).Lister()
+	nodeClient := kubeclient.Get(ctx).Corev1()
 	networkCM, err := kubeclient.Get(ctx).CoreV1().ConfigMaps(system.Namespace()).Get(ctx, network.ConfigName, metav1.GetOptions{})
 	if err != nil {
 		logger.Fatalw("Failed to fetch network config", zap.Error(err))
@@ -264,7 +265,6 @@ func componentConfigAndIP(ctx context.Context) leaderelection.ComponentConfig {
 	if err != nil {
 		logging.FromContext(ctx).Fatalw("Failed to generate Lease holder identify", zap.Error(err))
 	}
-
 	// Set up leader election config
 	leaderElectionConfig, err := sharedmain.GetLeaderElectionConfig(ctx)
 	if err != nil {

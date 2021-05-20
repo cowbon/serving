@@ -492,6 +492,7 @@ func NewThrottler(ctx context.Context, ipAddr string) *Throttler {
 
 // Run starts the throttler and blocks until the context is done.
 func (t *Throttler) Run(ctx context.Context, probeTransport http.RoundTripper, usePassthroughLb bool) {
+	t.logger.Errorf("Try to create rbm")
 	rbm := newRevisionBackendsManager(ctx, probeTransport, usePassthroughLb)
 	// Update channel is closed when ctx is done.
 	t.run(rbm.updates())
@@ -515,9 +516,12 @@ func (t *Throttler) run(updateCh <-chan revisionDestsUpdate) {
 // Try waits for capacity and then executes function, passing in a l4 dest to send a request
 func (t *Throttler) Try(ctx context.Context, revID types.NamespacedName, function func(string) error) error {
 	rt, err := t.getOrCreateRevisionThrottler(revID)
+	t.logger.Debugf("Find revision for %v", revID)
 	if err != nil {
+		t.logger.Errorf("Find revision for %v", err)
 		return err
 	}
+	t.logger.Debugf("Found")
 	return rt.try(ctx, function)
 }
 

@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"encoding/json"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
@@ -38,6 +39,9 @@ import (
 	"knative.dev/serving/pkg/metrics"
 	"knative.dev/serving/pkg/networking"
 	"knative.dev/serving/pkg/resources"
+	kubeclient "knative.dev/pkg/client/injection/kube/client"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"io/ioutil"
 )
 
 const (
@@ -137,11 +141,15 @@ var client = &http.Client{
 	Transport: keepAliveTransport,
 }
 
+type {
+}
+
 // serviceScraper scrapes Revision metrics via a K8S service by sampling. Which
 // pod to be picked up to serve the request is decided by K8S. Please see
 // https://kubernetes.io/docs/concepts/services-networking/network-policies/
 // for details.
 type serviceScraper struct {
+	client		http.Client
 	directClient scrapeClient
 	meshClient   scrapeClient
 
@@ -177,6 +185,7 @@ func newServiceScraperWithClient(
 	ctx := metrics.RevisionContext(metric.ObjectMeta.Namespace, svcName, cfgName, revisionName)
 
 	return &serviceScraper{
+		client:			  http.Client{},
 		directClient:     directClient,
 		meshClient:       meshClient,
 		host:             metric.Spec.ScrapeTarget + "." + metric.ObjectMeta.Namespace,
@@ -236,6 +245,25 @@ func (s *serviceScraper) Scrape(window time.Duration) (stat Stat, err error) {
 }
 
 func (s *serviceScraper) scrapePods(window time.Duration) (Stat, error) {
+	nodes, err := kubeclient.Get(s.statsCtx).CoreV1().Nodes().List(s.statsCtx, metav1.ListOptions{})
+
+	for _, node := range nodes.Items {
+		for _, addr := range node.Status.Addresses {
+			if string(addr.Type) == "InternalIP" {
+				url := fmt.Sprintf("http://%s:19999/api/v1/data?chart=eproxy.ReponseTime&after=-1", addr.Address)
+				req, err := http.NewRequestWithContext(s.statsCtx, http.MethodGet, s.url, nil)
+				res, err := s.client.Do(req)
+				if err != nil {
+					s.logger.Errorf("Failed to connect to %s", url)
+				}
+
+				// Parse request
+				defer res.Body.Close()
+				out, err := ioutil.ReadAll(res.Body)
+				json.Unmarshal(out, )
+			}
+		}
+	}
 	pods, youngPods, err := s.podAccessor.PodIPsSplitByAge(window, time.Now())
 	if err != nil {
 		s.logger.Infow("Error querying pods by age", zap.Error(err))
