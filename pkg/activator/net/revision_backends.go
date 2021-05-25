@@ -42,7 +42,7 @@ import (
 	pkgnet "knative.dev/networking/pkg/apis/networking"
 	"knative.dev/networking/pkg/prober"
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
-	podinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
+	//podinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
 	serviceinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
@@ -299,9 +299,23 @@ func (rw *revisionWatcher) checkDests(curDests, prevDests dests) {
 		return
 	}
 
+	reprobe := curDests.becameNonReady(prevDests)
+	if len(reprobe) > 0 {
+		rw.logger.Infow("Need to reprobe pods who became non-ready",
+			zap.Object("IPs", logging.StringSet(reprobe)))
+		// Trim the pods that migrated to the non-ready set from the
+		// ready set from the healthy pods. They will automatically
+		// probed below.
+		for p := range reprobe {
+			rw.healthyPods.Delete(p)
+		}
+	}
+
+	rw.sendUpdate("", curDests.ready)
+	return
 	// If we have discovered that this revision cannot be probed directly
 	// do not spend time trying.
-	if rw.podsAddressable {
+	/*if rw.podsAddressable {
 		// reprobe set contains the targets that moved from ready to non-ready set.
 		// so they have to be re-probed.
 		reprobe := curDests.becameNonReady(prevDests)
@@ -330,7 +344,7 @@ func (rw *revisionWatcher) checkDests(curDests, prevDests dests) {
 		rw.logger.Debugf("Done probing, got %d healthy pods", len(hs))
 		if !noop || len(reprobe) > 0 {
 			rw.healthyPods = hs
-			rw.sendUpdate("" /*clusterIP*/, hs)
+			rw.sendUpdate("" /*clusterIP, hs)
 			return
 		}
 		// no-op, and we have successfully probed at least one pod.
@@ -377,7 +391,7 @@ func (rw *revisionWatcher) checkDests(curDests, prevDests dests) {
 		rw.clusterIPHealthy = true
 		rw.healthyPods = nil
 		rw.sendUpdate(dest, curDests.ready)
-	}
+	}*/
 }
 
 func (rw *revisionWatcher) run(probeFrequency time.Duration) {
@@ -395,14 +409,14 @@ func (rw *revisionWatcher) run(probeFrequency time.Duration) {
 		rw.logger.Debugw("Revision state", zap.Object("dests", curDests),
 			zap.Object("healthy", logging.StringSet(rw.healthyPods)),
 			zap.Bool("clusterIPHealthy", rw.clusterIPHealthy))
-		if len(curDests.ready)+len(curDests.notReady) > 0 && !(rw.clusterIPHealthy ||
+		/*if len(curDests.ready)+len(curDests.notReady) > 0 && !(rw.clusterIPHealthy ||
 			curDests.ready.Union(curDests.notReady).Equal(rw.healthyPods)) {
 			rw.logger.Debug("Probing on timer")
 			tickCh = timer.C
 		} else {
 			rw.logger.Debug("Not Probing on timer")
 			tickCh = nil
-		}
+		}*/
 
 		select {
 		case <-rw.stopCh:
@@ -469,7 +483,7 @@ func newRevisionBackendsManagerWithProbeFrequency(ctx context.Context, tr http.R
 		},
 	})
 
-	podInformer := podinformer.Get(ctx)
+	/*podInformer := podinformer.Get(ctx)
 	podInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: reconciler.ChainFilterFuncs(
 			reconciler.LabelExistsFilterFunc(serving.RevisionUID),
@@ -479,7 +493,7 @@ func newRevisionBackendsManagerWithProbeFrequency(ctx context.Context, tr http.R
 			UpdateFunc: controller.PassNew(rbm.podUpdated),
 			DeleteFunc: rbm.podDeleted,
 		},
-	})
+	})*/
 
 	rbm.logger.Errorf("Running")
 	go func() {

@@ -19,7 +19,6 @@ package handler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httputil"
 
@@ -80,7 +79,7 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tryContext, trySpan = trace.StartSpan(r.Context(), "throttler_try")
 	}
 
-	fmt.Print("Received packet")
+	// a.logger.Infof("Received packet")
 	revID := RevIDFrom(r.Context())
 	if err := a.throttler.Try(tryContext, revID, func(dest string) error {
 		trySpan.End()

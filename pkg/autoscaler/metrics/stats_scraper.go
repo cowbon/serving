@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"encoding/json"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
@@ -39,9 +38,8 @@ import (
 	"knative.dev/serving/pkg/metrics"
 	"knative.dev/serving/pkg/networking"
 	"knative.dev/serving/pkg/resources"
-	kubeclient "knative.dev/pkg/client/injection/kube/client"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"io/ioutil"
+	//kubeclient "knative.dev/pkg/client/injection/kube/client"
+	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -141,8 +139,6 @@ var client = &http.Client{
 	Transport: keepAliveTransport,
 }
 
-type {
-}
 
 // serviceScraper scrapes Revision metrics via a K8S service by sampling. Which
 // pod to be picked up to serve the request is decided by K8S. Please see
@@ -245,9 +241,9 @@ func (s *serviceScraper) Scrape(window time.Duration) (stat Stat, err error) {
 }
 
 func (s *serviceScraper) scrapePods(window time.Duration) (Stat, error) {
-	nodes, err := kubeclient.Get(s.statsCtx).CoreV1().Nodes().List(s.statsCtx, metav1.ListOptions{})
+	//nodes, err := kubeclient.Get(s.statsCtx).CoreV1().Nodes().List(s.statsCtx, metav1.ListOptions{})
 
-	for _, node := range nodes.Items {
+	/*for _, node := range nodes.Items {
 		for _, addr := range node.Status.Addresses {
 			if string(addr.Type) == "InternalIP" {
 				url := fmt.Sprintf("http://%s:19999/api/v1/data?chart=eproxy.ReponseTime&after=-1", addr.Address)
@@ -259,11 +255,9 @@ func (s *serviceScraper) scrapePods(window time.Duration) (Stat, error) {
 
 				// Parse request
 				defer res.Body.Close()
-				out, err := ioutil.ReadAll(res.Body)
-				json.Unmarshal(out, )
 			}
 		}
-	}
+	}*/
 	pods, youngPods, err := s.podAccessor.PodIPsSplitByAge(window, time.Now())
 	if err != nil {
 		s.logger.Infow("Error querying pods by age", zap.Error(err))
